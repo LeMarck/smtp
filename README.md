@@ -1,6 +1,6 @@
 # PySMTP - SMTP Cient written in Python 3.4
 <dl>
-<b>usage: pysmtp.py [-h] host </b>
+<b>usage: pysmtp.py [-h] [-nl] host </b>
 
 <dt />host<dd />The host name of the SMTP server to which you are connecting
 <dt />-nl, --not-login<dd />Disable authorization
