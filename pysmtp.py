@@ -245,7 +245,7 @@ def main(args):
     smtp.mime()
 
     if message:
-        message += '\n\n-----\n Отправленно с помощью PySMTP\n' \
+        message += '\n\n-----\nОтправленно с помощью PySMTP\n' \
                    'https://github.com/LeMarck/smtp'
         smtp.text(message)
 
