@@ -246,7 +246,7 @@ def main(args):
 
     if message:
         message += '\n\n-----\n Отправленно с помощью PySMTP\n' \
-                   'https://github.com/LeMarck/python_smtp'
+                   'https://github.com/LeMarck/smtp'
         smtp.text(message)
 
     if files:
