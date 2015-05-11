@@ -103,10 +103,10 @@ class SMTP:
         self.answer = b''
         try:
             while True:
-                answer = self.connection.recv(512)[:-2]
+                answer = self.connection.recv(512)
                 if not answer:
                     break
-                self.answer += answer + b'\n'
+                self.answer += answer
         except socket.timeout:
             if self.debug:
                 print(self.answer.decode())
