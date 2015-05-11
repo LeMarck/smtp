@@ -24,7 +24,7 @@ import re
 
 __author__ = 'Evgeny Petrov'
 
-__version__ = '1.3'
+__version__ = '1.6'
 
 
 CRLF = b'\r\n'
@@ -68,6 +68,9 @@ class SMTP:
         self.timeout = timeout
         self.debug = debug
         self.boundary = self._boundary()
+        self.pipelining = False
+        self.bitmime = ''
+        self.dsn = False
 
     def _boundary(self):
         boundary = ''
@@ -96,33 +99,65 @@ class SMTP:
     def ssl_connect(self, host):
         self._create_connection(host, 465)
 
+    def recv(self):
+        self.answer = b''
+        try:
+            while True:
+                answer = self.connection.recv(512)[:-2]
+                if not answer:
+                    break
+                self.answer += answer + b'\n'
+        except socket.timeout:
+            if self.debug:
+                print(self.answer.decode())
+            else:
+                pass
+
     def send(self, msg):
         self.connection.send(msg.encode() + CRLF)
 
     def request(self, msg):
         self.send(msg)
-        self.answer = self.connection.recv(512)[:-2]
-        if self.debug:
-            print(self.answer.decode())
+        self.recv()
 
     def getAnswer(self):
         return self.answer.decode()
 
     def ehlo(self):
         self.request('EHLO HI')
+        if b'PIPELINING' in self.answer:
+            self.pipelining = True
+        if b'8BITMIME' in self.answer:
+            self.bitmime = ' BODY=8BITMIME'
+        if b'DSN' in self.answer:
+            self.dsn = True
 
     def auth_login(self, addr, pass_=None):
-        self.addr = addr
+        matcher = re.match(r'^(([\w.-_]+ )*)([\w.-_]+@[\w.]+)', addr)
+        self.name = ''
+        if matcher.group(1):
+            self.name = '=?utf-8?B?{}?='.format(
+                base_64(matcher.group(1)[:-1]))
+        self.addr = matcher.group(3)
         if pass_:
             self.request("AUTH LOGIN")
             self.request(base_64(self.addr))
             self.request(base_64(pass_))
 
     def mail_from(self):
-        self.request('MAIL FROM: <{}>'.format(self.addr))
+        if self.debug and self.dsn:
+            self.bitmime += ' RET=HDRS ENVID={}'.format(self._boundary())
+        self.request('MAIL FROM: {}<{}>{}'.format(self.name, self.addr,
+                                                  self.bitmime))
 
     def rcpt_to(self, addr):
-        self.request('RCPT TO: <{}>'.format(addr))
+        dsn = ''
+        if self.debug and self.dsn:
+            dsn = ' NOTIFY=SUCCESS,FAILURE ORCPT=rfc822;{}'.format(addr)
+        if self.pipelining:
+            self.send('RCPT TO: <{}>{}'.format(addr, dsn))
+        else:
+            self.request('RCPT TO: <{}>{}'.format(addr, dsn))
 
     def data(self):
         self.request('DATA')
@@ -131,7 +166,7 @@ class SMTP:
         self.send('DATE: ' + time.strftime('%d %b %y %H:%M:%S'))
 
     def from_(self):
-        self.send('FROM: <{}>'.format(self.addr))
+        self.send('FROM: {}<{}>'.format(self.name, self.addr))
 
     def to(self, addr):
         self.send('TO: <{}>'.format(addr))
@@ -192,11 +227,11 @@ def main(args):
     smtp.ehlo()
 
     if not args.not_login:
-        addr = input('E-mail: ')
-        pass_ = getpass.getpass()
+        addr = input('От: ')
+        pass_ = getpass.getpass('Пароль: ')
         smtp.auth_login(addr, pass_)
-        print('')
         if not re.match(r'^235', smtp.getAnswer()):
+            print("\nОшибка авторизации, попробуйте снова\n")
             smtp.quit()
             main(args)
     else:
@@ -204,16 +239,16 @@ def main(args):
         smtp.auth_login(addr)
 
     smtp.mail_from()
-    addresses = input('Кому (разделяя пробелом): ')
+    addresses = input('Кому: ')
     addresses = addresses.split(' ')
     for addr in addresses:
         while not re.match(r'[\d\w\.\-_]+@(.*)', addr):
-            addr = input('{} rename in: '.format(addr))
+            addr = input('{} изменить на: '.format(addr))
         smtp.rcpt_to(addr)
 
     theme = input('Тема: ')
 
-    print('Введите сообщение и/или Enter для продолжения')
+    print('')
     message = ''
     while True:
         msg = input()
@@ -221,10 +256,9 @@ def main(args):
             break
         message += msg + '\n'
 
-    print('Введите путь к папке/файлу и/или Enter для отправки')
     files = []
     while True:
-        file = input()
+        file = input('+')
         if not file:
             break
         if os.path.exists(file):
@@ -241,7 +275,8 @@ def main(args):
     smtp.data()
     smtp.date()
     smtp.from_()
-    smtp.to(addr)
+    for addr in addresses:
+        smtp.to(addr)
     smtp.sudject(theme)
     smtp.mime()
 
@@ -257,25 +292,44 @@ def main(args):
                 smtp.file(os.path.split(f)[1], file.read())
 
     smtp.end()
+    if re.match(r'^250', smtp.getAnswer()):
+        print('\nСообщение отправлено')
     smtp.quit()
+    sys.exit()
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('host', type=str, help='The host name'
-                                               ' of the SMTP server to '
-                                               'which you are connecting.')
+    parser = argparse.ArgumentParser(
+        usage='''%(prog)s [-h] [-nl] [-d] host\n
+    От: [имя] e-mail
+    Пароль: пароль              # не используется с флагом -nl
+    Кому: e-mails               # через пробел
+    Тема: тема
+
+    [Текстовое_сообщение]       # двойное нажатие на Enter
+    ...                         # переводит на следующий пункт
+
+    +[Имя_файла]                # двойное нажатие на Enter
+    +...                        # отправляет сообщение
+
+!!! Пустые сообщения не отправляются
+    ''',
+        epilog='''(C) 2015 LeMarck (https://github.com/LeMarck)''',
+        add_help=False)
+    parser.add_argument('host', type=str, help='Имя SMTP-сервера, '
+                                               'к которому вы подключаетесь')
     parser.add_argument("-nl", "--not-login", action='store_true',
-                        help="Disable authorization")
+                        help="Отключение авторизации")
     parser.add_argument("-d", "--debug", action='store_true',
-                        help="Debug mode ON")
+                        help="Отладочный режим")
+    parser.add_argument('-h', '--help', action='help', help='Справка')
 
     args = parser.parse_args()
 
     try:
         main(args)
     except KeyboardInterrupt:
-        sys.exit("\nConnection terminated")
+        sys.exit("\n\nСоединение разорвано")
     except socket.timeout:
         pass
     except Exception as e:
