@@ -149,6 +149,9 @@ class SMTP:
             self.bitmime += ' RET=HDRS ENVID={}'.format(self._boundary())
         self.request('MAIL FROM: {}<{}>{}'.format(self.name, self.addr,
                                                   self.bitmime))
+        if re.match(rb'^550', self.answer):
+            self.name = ''
+            self.request('MAIL FROM: <{}>{}'.format(self.addr, self.bitmime))
 
     def rcpt_to(self, addr):
         dsn = ''
@@ -178,6 +181,7 @@ class SMTP:
         self.send('MIME-Version: 1.0')
         self.send('Content-Type: multipart/mixed; '
                   'boundary={}; charset=utf-8'.format(self.boundary))
+        self.send('')
 
     def text(self, msg):
         self.send('--{}'.format(self.boundary))
@@ -241,10 +245,10 @@ def main(args):
     smtp.mail_from()
     addresses = input('Кому: ')
     addresses = addresses.split(' ')
-    for addr in addresses:
-        while not re.match(r'[\d\w\.\-_]+@(.*)', addr):
-            addr = input('{} изменить на: '.format(addr))
-        smtp.rcpt_to(addr)
+    for i in range(len(addresses)):
+        while not re.match(r'[\d\w\.\-_]+@(.*)', addresses[i]):
+            addresses[i] = input('{} изменить на: '.format(addresses[i]))
+        smtp.rcpt_to(addresses[i])
 
     theme = input('Тема: ')
 
